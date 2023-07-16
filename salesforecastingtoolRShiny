@@ -21,7 +21,7 @@ nweek_now <- max(sales$Week)
 ```
 
 
-### Sales Forecasting Tool
+### Sales Forecasting Tool - By Chisom Egwuatu
 
 ######## This tool runs forecasting using your sales data. Note that forecasted values are intepreted as 'store sales targets', so any current value falling short will be flagged in red. Happy exploring!
 
