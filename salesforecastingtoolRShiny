@@ -1,0 +1,517 @@
+---
+title: "Beau & Pavel Solutions"
+output: html_document
+runtime: shiny
+---
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(forecast)
+library(shinythemes)
+library(plotly)
+library(shinyWidgets)
+library(DT)
+
+# historical records from multiple stores
+fsales <- "https://raw.githubusercontent.com/multidis/hult-inter-bus-reports-r/main/forecasting/sales_weekly.csv"
+sales <- read_csv(fsales)
+
+# latest (current) week
+nweek_now <- max(sales$Week)
+```
+
+
+### Sales Forecasting Tool
+
+######## This tool runs forecasting using your sales data. Note that forecasted values are intepreted as 'store sales targets', so any current value falling short will be flagged in red. Happy exploring!
+
+
+```{r echo = FALSE}
+ui <- shinyUI(fluidPage(
+  theme = shinytheme("cerulean"),
+  tags$head(tags$style(HTML("
+  .tabbable > .nav > li.active > a, .tabbable > .nav > li.active > a:focus {
+    border-right: 3px solid black;
+  }  
+"))),
+  tabsetPanel(id = "tabs",
+    tabPanel("Start",
+             tags$style(type='text/css', ".shiny-options-group { line-height: 2.0; }"),
+             tags$div(style = "padding-top: 20px; font-size: 40px;"),
+             radioButtons("start_option", 
+                          label = "What would you like to do today?", 
+                          choices = list("Forecast Upcoming Weeks" = "Forecast", 
+        "Check Store's Performance " = "Performance",
+        "Specific Week Forecast" = "specificWeekForecast",
+        "Yearly Comparison" = "Yearly Comparison"), 
+                          selected = NULL),
+             actionButton("go_button", "Go!")
+    ),
+
+#Forecast Tab
+    tabPanel("Forecast", 
+             helpText("On this tab you can generate a forecast for upcoming weeks for your selected store. Use the 'Select store' dropdown to choose a store, and the slider or text input to choose the forecast horizon. Hover over the graph to view the forecast for each week"),
+             sidebarLayout(
+               sidebarPanel(
+                 selectInput("storenum", label = "Select store: ",
+                             choices = 1:max(sales$Store), selected = 1),
+                 tags$div(
+        sliderInput("horizon", label = "Select how many weeks to forecast using the slider: ", min = 2, max = 52, value = 8, step = 1),
+        numericInput("horizon_num", label = "Or simply type it in: ", value = 8)
+      )
+               ),
+               mainPanel(
+                 tags$div(style = "padding-top: 20px;"),
+                 plotlyOutput("forecastPlot", height = "250px", width = "600px"),
+                 actionButton("back_to_menu1", "Return to menu")
+               )
+             )
+    ),
+   
+  #Performance Tab
+  tabPanel("Performance", 
+    helpText("This tab provides a performance indicator for the current week's actual sales vs. the forecast computed at the end of the last week for a selected store. Use the 'Select store' dropdown to choose a store."),
+    
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("storenum_perf", label = "Select store: ",
+                    choices = 1:max(sales$Store), selected = 1),
+        radioButtons("view_choice", label = "Choose view type:", 
+                     choices = list("Summary Panels" = "summary", "Graph" = "graph"), selected = "summary")
+      ),
+      mainPanel(
+        conditionalPanel(
+          condition = "input.view_choice == 'summary'",
+          fluidRow(
+            column(6, wellPanel(
+              tags$h3("Current week's actual sales", 
+                      style = "font-size: 120%;"),
+              htmlOutput("actual_sales")
+            )),
+            column(6, wellPanel(
+              tags$h3("Forecasted sales", 
+                      style = "font-size: 120%;"),
+              htmlOutput("forecasted_sales")
+            ))
+          ),
+          wellPanel(
+            tags$h3("Performance summary", 
+                    style = "font-size: 120%;"),
+            htmlOutput("performance_summary")
+          )
+        ),
+        conditionalPanel(
+          condition = "input.view_choice == 'graph'",
+          plotOutput("performancePlot", height = "300px", width = "600px")
+        ),
+        actionButton("back_to_menu2", "Return to menu")
+      )
+    )
+  ),
+  
+  
+  #Specific Week Forecast Tab
+  tabPanel("Specific Week Forecast", value = "specificWeekForecast",
+    helpText("This tab allows you to generate a sales forecast for a specific future week within the next three months for a selected store. Use the 'Select store' dropdown to choose a store, the 'Select week' slider to choose a current week, and the 'Select future week' slider to choose a future week."),
+    
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("storenum_week", label = "Select store: ",
+                    choices = 1:max(sales$Store), selected = 1),
+        sliderInput("week", label = "Enter the current week: ",
+                    min = 0, max = 142, value = 0, step = 1),
+        uiOutput("futureWeekSlider")
+      ),
+      mainPanel(
+        uiOutput("sales_forecast"),
+        plotlyOutput("weekPlot", height = "270px", width = "600px"),
+        actionButton("back_to_menu4", "Return to menu")
+      )
+    )
+  ),
+  
+  #Yearly Comparison Tab
+  tabPanel("Yearly Comparison", 
+    helpText("This tab allows you to compare the monthly sales of the past year and the forecasted sales for the upcoming year."),
+
+    sidebarLayout(
+        sidebarPanel(
+            selectInput("storenum_yearly", label = "Select store: ",
+                    choices = 1:max(sales$Store), selected = 1)
+        ),
+        mainPanel(
+            plotlyOutput("yearlyPlot", height = "250px", width = "700px"),
+            actionButton("back_to_menu5", "Return to menu")
+        )
+    )
+  )
+  
+  ) # Closes tabsetPanel
+)) # Closes fluidPage
+
+```
+
+
+
+```{r echo = FALSE}
+
+### Example reactive chart
+
+```{r echo = FALSE}
+server <- function(input, output, session) {
+  
+  observe({
+    showModal(modalDialog(
+      title = "Welcome to the Sales Forecasting and Analysis Tool!",
+      "This tool is designed to empower you with the ability to analyze and forecast your weekly sales data with ease. Our advanced yet intuitive interface gives you insights into weekly trends, yearly comparisons, and projections for future weeks.
+      
+      We have assumed that the forecasted values also represent your 'targets'. For this reason, in various tabs, if a current value falls short of a forecasted value, it will be color-coded in red. This visual cue helps you quickly identify areas that may require your attention.
+      
+      Dive in, explore the data, and use the insights generated by this tool to make informed decisions and strategies for your business. Enjoy your journey!",
+      easyClose = FALSE,
+      footer = tagList(
+        actionButton("ok", "Okay, got it!")
+      )
+    ))
+  })
+  
+  observeEvent(input$ok, {
+    removeModal()
+  })
+  
+  visited_forecast <- reactiveVal(FALSE)
+  
+  observeEvent(input$go_button, {
+    if(input$start_option == "Forecast" && !visited_forecast()) {
+      showModal(modalDialog(
+        title = "Welcome to the Sales Forecasting section!",
+        "This tab enables you to predict sales for a specific store over the coming weeks.",
+        "Here's how to get started:",
+        tags$ul(
+          tags$li("Choose a store from the 'Select store' dropdown menu."),
+          tags$li("Use the slider or enter a value to select how many weeks you'd like to forecast."),
+          tags$li("After making your selections, the interactive graph will display your sales forecast. Hover over the graph to view the forecast for each week."),
+          tags$li("When you're done, click 'Return to menu' to explore other forecasting options.")
+        ),
+        easyClose = TRUE
+      ))
+      visited_forecast(TRUE)
+    }
+    updateTabsetPanel(session, "tabs", selected = input$start_option)
+  })
+
+  observeEvent(input$go_button, {
+    updateTabsetPanel(session, "tabs", selected = input$start_option)
+  })
+  
+  visited_performance <- reactiveVal(FALSE)
+
+  observeEvent(input$go_button, {
+    if(input$start_option == "Performance" && !visited_performance()) {
+      showModal(modalDialog(
+        title = "Welcome to the Performance Analysis Section!",
+        "In this section, you'll find an interactive performance comparison between actual and forecasted sales for a selected store in the current week.",
+        "Here's how to get the most out of this section:",
+        tags$ul(
+          tags$li("Choose a store from the 'Select store' dropdown menu."),
+          tags$li("Choose the view type. 'Summary Panels' will give you a brief report on actual, forecasted sales and performance summary. 'Graph' will plot the actual and forecasted sales for a visual comparison."),
+          tags$li("When viewing 'Summary Panels', a green number indicates sales exceeding forecast, while red indicates the forecast was missed."),
+          tags$li("Explore the impact of different stores' performances by selecting different stores from the dropdown."),
+          tags$li("When you're done, click 'Return to menu' to explore other forecasting options.")
+        ),
+        easyClose = TRUE
+      ))
+      visited_performance(TRUE)
+    }
+  })
+
+  visited_specificWeekForecast <- reactiveVal(FALSE)
+  
+observeEvent(input$go_button, {
+    if(input$start_option == "specificWeekForecast" && !visited_specificWeekForecast()) {
+      showModal(modalDialog(
+        title = "Welcome to the Specific Week Forecasting section!",
+        "In this tab, you can generate a sales forecast for a specific future week within the next three months for a selected store.",
+        "Here's how to get started:",
+        tags$ul(
+          tags$li("Choose a store from the 'Select store' dropdown menu."),
+          tags$li("Use the sliders to select the current week and a future week."),
+          tags$li("After making your selections, the page will display your sales forecast."),
+          tags$li("When you're done, click 'Return to menu' to explore other forecasting options.")
+        ),
+        easyClose = TRUE
+      ))
+      visited_specificWeekForecast(TRUE)
+    }
+    updateTabsetPanel(session, "tabs", selected = input$start_option)
+  })
+
+visited_yearlyComparison <- reactiveVal(FALSE)
+  
+observeEvent(input$go_button, {
+    if(input$start_option == "Yearly Comparison" && !visited_yearlyComparison()) {
+      showModal(modalDialog(
+        title = "Welcome to the Yearly Comparison section!",
+        "In this unique tab, you can juxtapose the actual sales of the past year with the forecasted sales for the upcoming year for a chosen store. This serves as a powerful tool to assess performance and strategize for future business operations.",
+        "Here's how to navigate through this exciting section:",
+        tags$ul(
+          tags$li("Choose a store from the 'Select store' dropdown menu."),
+          tags$li("Once selected, a bar chart will display showing the monthly sales comparison between the past year and the forecast for the upcoming year."),
+          tags$li("Actual sales are represented in sky blue while the forecasted sales are in grey. This visual representation gives an at-a-glance understanding of how the store is expected to perform in comparison to the past."),
+          tags$li("When you're ready, click 'Return to menu' to explore other forecast options or delve into a different store's yearly comparison.")
+        ),
+        easyClose = TRUE
+      ))
+      visited_yearlyComparison(TRUE)
+    }
+    updateTabsetPanel(session, "tabs", selected = input$start_option)
+  }) #END OF POP UPS FUNCTIONALITY
+
+#FORECASTING TAB
+  
+  forecast_horizon <- reactive({
+    if (!is.null(input$horizon_num)) {
+      as.integer(input$horizon_num)
+    } else {
+      input$horizon
+    }
+  })
+  
+  output$forecastPlot <- renderPlotly({
+  horiz <- if (!is.null(input$horizon_text) && nchar(input$horizon_text) > 0) {
+    as.numeric(input$horizon_text)
+  } else {
+    input$horizon
+  }
+  
+  sales_ts <- ts(sales %>% filter(Store == input$storenum) %>%
+                   select(Weekly_Sales), frequency = 52)
+  arima_model <- auto.arima(sales_ts, seasonal.test = "seas")
+  arima_pred <- forecast(arima_model, h = horiz)
+  
+  sales_pred <- data.frame(Sales_Predicted = as.numeric(arima_pred$mean),
+                           Week = (nweek_now + 1):(nweek_now + horiz),
+                           Relative_Week = 1:horiz)
+  
+  plot_data <- sales_pred %>% mutate(Sales_Predicted = round(Sales_Predicted, 2))
+  
+  fig <- plot_ly(plot_data, x = ~Relative_Week, y = ~Sales_Predicted, type = 'scatter', mode = 'lines',
+                 hoverinfo = 'text',
+                 text = ~paste('Week ', Relative_Week, '<br>', 'Forecasted Sales: $', format(Sales_Predicted, big.mark = ","))) %>%
+    layout(title = list(text = paste("\nStore", input$storenum, "'s Sales Forecast for the next", horiz, "weeks"), x = 0.5, font = list(size = 14)),
+           
+           xaxis = list(title = "Weeks ahead", 
+                        showgrid = FALSE,
+                        linecolor = 'lightgrey'),
+           
+           yaxis = list(title = "Sales Forecast", 
+                        tickformat = '$,.2s', 
+                        showgrid = FALSE, 
+                        linecolor = 'lightgrey',
+                       titlefont = list(size = 13)))
+  
+  fig
+})
+  
+  forecast_current_week <- reactive({
+    sales_ts <- ts(sales %>% filter(Store == input$storenum_perf) %>%
+                     select(Weekly_Sales), frequency = 52)
+    arima_model <- auto.arima(sales_ts, seasonal.test = "seas")
+    arima_pred <- forecast(arima_model, h = 1)
+    
+    as.numeric(arima_pred$mean)
+  })
+
+  performance_summary <- reactive({
+    actual_sales <- sales %>% filter(Store == input$storenum_perf, Week == nweek_now) %>%
+      pull(Weekly_Sales)
+    performance <- actual_sales - forecast_current_week()
+    percent_diff <- (performance / actual_sales) * 100
+
+    if (actual_sales > forecast_current_week()) {
+      paste("Store", input$storenum_perf, "outperformed forecasted sales by", round(percent_diff, 2), "%")
+    } else {
+      paste("Store", input$storenum_perf, "missed forecasted sales by", round(-percent_diff, 2), "%")
+    }
+  })
+
+  output$actual_sales <- renderUI({
+    actual_sales <- sales %>% filter(Store == input$storenum_perf, Week == nweek_now) %>%
+      pull(Weekly_Sales)
+
+    color <- if(actual_sales < forecast_current_week()) "red" else "green"
+
+    HTML(paste0('<span style="color:', color, '"><b>', 
+         "$", format(round(actual_sales, 2), big.mark = ","), 
+         '</b></span>'))
+  })
+
+  output$forecasted_sales <- renderUI({
+    HTML(paste0("<b>", "$", format(round(forecast_current_week(), 2), big.mark = ","), "</b>"))
+  })
+
+  #PERFORMANCE 
+  output$performance_summary <- renderUI({
+    HTML(performance_summary())
+  })
+  
+  
+   output$performancePlot <- renderPlot({
+    actual_sales <- sales %>% filter(Store == input$storenum_perf, Week == nweek_now) %>%
+      pull(Weekly_Sales)
+    
+    sales_data <- data.frame(Type = c("Actual Sales", "Forecast"),
+                             Sales = c(actual_sales, forecast_current_week()))
+    
+    sales_data %>% ggplot(aes(Type, Sales, fill = Type)) +
+      geom_bar(stat = "identity") +
+      labs(x = "", y = "Sales", 
+           fill = "", 
+           title = "Current week's actual sales vs. the forecast ",
+           subtitle = performance_summary()) +
+  theme_classic() +
+      theme(
+        plot.title = element_text(size = 15, face = "bold")  # Modify font size and face of the title
+      ) +
+      scale_fill_manual(values = c("Actual Sales" = "skyblue", "Forecast" = "grey")) +
+      scale_y_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M"))
+  })
+  
+  
+  #FUTURE WEEK SLIDER
+  output$futureWeekSlider <- renderUI({
+    sliderInput("future_week", label = "Select a week in the future: ",
+                min = input$week + 1, max = min(input$week + 13, 142), value = input$week + 13, step = 1)
+  })
+  
+  sales_forecast <- reactive({
+    sales_ts <- ts(sales %>% filter(Store == input$storenum_week) %>%
+                     select(Weekly_Sales), frequency = 52)
+    arima_model <- auto.arima(sales_ts, seasonal.test = "seas")
+    arima_pred <- forecast(arima_model, h = input$future_week - input$week)
+    as.numeric(arima_pred$mean[[input$future_week - input$week]])
+})
+  
+  output$sales_forecast <- renderUI({
+    HTML(paste0("<b> The Sales Forecast for the Selected Week in the Future is $", format(round(sales_forecast(), 2), big.mark = ","), "</b>"))
+  })
+  
+  output$weekPlot <- renderPlotly({
+    sales_ts <- ts(sales %>% filter(Store == input$storenum_week) %>%
+                     select(Weekly_Sales), frequency = 52)
+    arima_model <- auto.arima(sales_ts, seasonal.test = "seas")
+    
+    # Determine the forecast horizon based on the selected future week
+    horiz <- input$future_week - input$week
+    
+    arima_pred <- forecast(arima_model, h = horiz)
+    
+    sales_pred <- data.frame(Sales_Predicted = as.numeric(arima_pred$mean),
+                             Week = (input$week + 1):input$future_week)
+    
+    fig <- plot_ly(sales_pred, x = ~Week, y = ~Sales_Predicted, type = 'scatter', mode = 'lines',
+                 hoverinfo = 'text',
+                 text = ~paste('Week ', Week, '<br>', 'Forecasted Sales: $', format(Sales_Predicted, big.mark = ","))) %>%
+    layout(title = list(text = "", x = 0.5, font = list(size = 14)),
+           
+           xaxis = list(title = "Weeks ahead", 
+                        showgrid = FALSE,
+                        linecolor = 'lightgrey'),
+           
+           yaxis = list(title = "Sales Forecast", 
+                        tickformat = '$,.2s', 
+                        showgrid = FALSE, 
+                        linecolor = 'lightgrey',
+                        titlefont = list(size = 13)))
+  
+    fig  
+    
+  })
+  
+
+ # YEARLY COMPARISON TAB FUNCTIONALITY
+
+output$yearlyPlot <- renderPlotly({
+  # Code to generate and display yearly plot
+    library(lubridate)
+
+    # Forecast sales for next 52 weeks
+    sales_ts <- ts(sales %>% filter(Store == input$storenum_yearly) %>%
+                     select(Weekly_Sales), frequency = 52)
+    arima_model <- auto.arima(sales_ts, seasonal.test = "seas")
+    forecast_next_year <- forecast(arima_model, h = 52)
+
+    # Get sales from the past year
+    sales_last_year <- sales %>% 
+        filter(Store == input$storenum_yearly, Week > (nweek_now - 52))
+
+    # Combine the data
+    comparison_data <- data.frame(
+        Week = c((nweek_now - 51):nweek_now, (nweek_now + 1):(nweek_now + 52)),
+        Sales = c(sales_last_year$Weekly_Sales, as.numeric(forecast_next_year$mean)),
+        Type = rep(c("Actual", "Forecast"), each = 52)
+    )
+
+    # Assume that the data starts from the first week of January and follows sequentially
+    # Create a date sequence with one date for each week
+    start_date <- as.Date("2022-01-01")  # adjust this as per your data
+    comparison_data$Date <- start_date + (comparison_data$Week - 1) * 7
+
+    # Convert dates to months
+    comparison_data$Month <- month(comparison_data$Date, label = TRUE, abbr = TRUE)
+
+    # Calculate monthly sales
+    monthly_sales <- comparison_data %>% 
+        group_by(Month, Type) %>% 
+        summarise(Sales = sum(Sales), .groups = "drop")
+
+    # Plot the data
+    monthly_sales %>% ggplot(aes(fill = Type, y = Sales, x = Month)) +
+        geom_bar(position = position_dodge(), stat = "identity") +
+        labs(x = "Month", y = "Sales", 
+             fill = "", 
+             title = "\nComparison of monthly sales (last year and forecasted)",
+             subtitle = paste("Store", input$storenum_yearly)) +
+        scale_fill_manual(values = c("Actual" = "skyblue", "Forecast" = "grey")) +
+        scale_y_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M")) +
+        theme_classic() +
+        theme(
+          plot.title = element_text(size = 10, face = "bold")  # Modify font size of the title
+        )
+})
+
+
+# Navigation functionality
+observeEvent(input$back_to_menu5, {
+    updateTabsetPanel(session, "tabs", selected = "Start")
+})
+
+  observeEvent(input$back_to_menu1, {
+    updateTabsetPanel(session, "tabs", selected = "Start")
+  })
+  observeEvent(input$back_to_menu2, {
+    updateTabsetPanel(session, "tabs", selected = "Start")
+  })
+  observeEvent(input$back_to_menu3, {
+    updateTabsetPanel(session, "tabs", selected = "Start")
+  })
+  observeEvent(input$back_to_menu4, {
+    updateTabsetPanel(session, "tabs", selected = "Start")
+  })
+  observeEvent(input$horizon, {
+  updateNumericInput(session, "horizon_num", value = input$horizon)
+})
+
+observeEvent(input$horizon_num, {
+  updateSliderInput(session, "horizon", value = input$horizon_num)
+})
+
+forecast_horizon <- reactive({
+  input$horizon
+})
+}
+
+# Launch the app
+shinyApp(ui = ui, server = server)
+
+```
